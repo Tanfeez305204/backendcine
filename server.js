@@ -27,6 +27,11 @@ const devOriginPatterns = [
   /^https?:\/\/192\.168(?:\.\d{1,3}){2}(?::\d+)?$/i,
   /^https?:\/\/172\.(1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}(?::\d+)?$/i
 ];
+const publicReadPathPatterns = [
+  /^\/api\/health$/i,
+  /^\/api\/categories$/i,
+  /^\/api\/movies(?:\/[^/]+)?$/i
+];
 
 const isOriginAllowed = (origin) => {
   if (!origin) {
@@ -44,6 +49,25 @@ const isOriginAllowed = (origin) => {
   return false;
 };
 
+const hasPrivilegedCorsHeaders = (req) => {
+  const requestedHeaders = (req.header("Access-Control-Request-Headers") || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  return requestedHeaders.includes("authorization") || Boolean(req.header("Authorization"));
+};
+
+const isPublicReadRequest = (req) => {
+  const method = (req.method || "").toUpperCase();
+
+  return (
+    ["GET", "HEAD"].includes(method) &&
+    publicReadPathPatterns.some((pattern) => pattern.test(req.path)) &&
+    !hasPrivilegedCorsHeaders(req)
+  );
+};
+
 if (process.env.TRUST_PROXY === "true") {
   app.set("trust proxy", 1);
 }
@@ -55,19 +79,29 @@ app.use(
 );
 app.use(compression());
 app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (isOriginAllowed(origin)) {
-        callback(null, true);
-        return;
-      }
+  cors((req, callback) => {
+    const origin = req.header("Origin");
 
-      const error = new Error("Origin not allowed by CORS.");
-      error.statusCode = 403;
-      error.errors = [{ field: "origin", message: "Origin not allowed by CORS." }];
-      callback(error);
-    },
-    credentials: true
+    if (!origin || isOriginAllowed(origin)) {
+      callback(null, {
+        origin: true,
+        credentials: true
+      });
+      return;
+    }
+
+    if (isPublicReadRequest(req)) {
+      callback(null, {
+        origin: true,
+        credentials: false
+      });
+      return;
+    }
+
+    const error = new Error("Origin not allowed by CORS.");
+    error.statusCode = 403;
+    error.errors = [{ field: "origin", message: "Origin not allowed by CORS." }];
+    callback(error);
   })
 );
 app.use(express.json({ limit: "2mb" }));
